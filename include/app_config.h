@@ -12,7 +12,7 @@
 #define APP_PIN_LED_RED         6
 
 /* PID configuration */
-#define APP_PID_SETPOINT_C      22.5f
+#define APP_PID_SETPOINT_C      23.8f
 #define APP_PID_KP              8.0f
 #define APP_PID_KI              0.15f
 #define APP_PID_KD              2.0f

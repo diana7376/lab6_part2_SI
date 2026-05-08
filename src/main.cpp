@@ -21,6 +21,7 @@
  * ========================================================================== */
 #include <Arduino.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "app_config.h"
 #include "ed_dht.h"
@@ -42,6 +43,7 @@ static FILE s_stdout;
 static srv_pid_t g_pid;
 static srv_tpo_t g_tpo;
 
+static float g_setpoint      = APP_PID_SETPOINT_C;
 static float g_temperature_c = 0.0f;
 static int   g_temp_valid    = 0;
 static float g_pid_output    = 0.0f;
@@ -51,6 +53,10 @@ static int   g_relay_on      = 0;
 static unsigned long t_last_acq  = 0;
 static unsigned long t_last_ctrl = 0;
 static unsigned long t_last_disp = 0;
+
+/* --- serial setpoint input buffer --- */
+static char    s_rx_buf[8];
+static uint8_t s_rx_len = 0;
 
 /* ------------------------------------------------------------------------- */
 /*  Print a float with 2 decimals using only integer math.
@@ -92,7 +98,7 @@ static void run_control(void)
     const float dt_s = ((float)APP_T_CTRL_MS) / 1000.0f;
 
     if (g_temp_valid) {
-        g_pid_output = srv_pid_compute(&g_pid, APP_PID_SETPOINT_C,
+        g_pid_output = srv_pid_compute(&g_pid, g_setpoint,
                                        g_temperature_c, dt_s);
     } else {
         /* Safety: if sensor unreadable, force OFF and reset the PID so we
@@ -116,7 +122,7 @@ static void run_control(void)
 static void run_display(void)
 {
     Serial.print(F("SP="));
-    print_fixed2(APP_PID_SETPOINT_C);
+    print_fixed2(g_setpoint);
     Serial.print(F("  T="));
     if (g_temp_valid) {
         print_fixed2(g_temperature_c);
@@ -127,6 +133,36 @@ static void run_display(void)
     print_fixed2(g_pid_output);
     Serial.print(F("%  Relay="));
     Serial.println(g_relay_on ? F("ON ") : F("OFF"));
+}
+
+/* ------------------------------------------------------------------------- */
+/*  Reads characters from Serial without blocking. On newline, parses the
+ *  accumulated string as a float and updates g_setpoint if in range.
+ *  Usage: type a number (e.g. "28.5") and press Enter.
+ * ------------------------------------------------------------------------- */
+static void run_serial_input(void)
+{
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\r' || c == '\n') {
+            if (s_rx_len > 0) {
+                s_rx_buf[s_rx_len] = '\0';
+                float val = (float)atof(s_rx_buf);
+                if (val >= 10.0f && val <= 50.0f) {
+                    g_setpoint = val;
+                    srv_pid_reset(&g_pid);
+                    Serial.print(F("SP -> "));
+                    print_fixed2(g_setpoint);
+                    Serial.println(F(" C"));
+                } else {
+                    Serial.println(F("ERR: setpoint must be 10-50 C"));
+                }
+                s_rx_len = 0;
+            }
+        } else if (s_rx_len < (uint8_t)(sizeof(s_rx_buf) - 1)) {
+            s_rx_buf[s_rx_len++] = c;
+        }
+    }
 }
 
 /* ========================================================================= */
@@ -186,6 +222,9 @@ void setup(void)
 void loop(void)
 {
     unsigned long now = millis();
+
+    /* Serial setpoint input — runs every iteration, non-blocking */
+    run_serial_input();
 
     /* "Task" Acquisition */
     if (now - t_last_acq >= APP_T_ACQ_MS) {
